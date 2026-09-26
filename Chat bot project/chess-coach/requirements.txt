@@ -1,0 +1,4 @@
+Flask
+chess
+requests
+python-dotenv

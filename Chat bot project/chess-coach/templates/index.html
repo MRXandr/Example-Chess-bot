@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chess Coach — AI move suggestions</title>
+<style>
+  :root {
+    --bg: #0f1216;
+    --panel: #171c23;
+    --panel-2: #1f262f;
+    --line: #2a323d;
+    --text: #e6eaf0;
+    --muted: #97a3b4;
+    --accent: #6ee7a8;
+    --accent-dim: #2b6b4c;
+    --danger: #f28b82;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: .2px; }
+  header .spacer { flex: 1; }
+  .pill {
+    font-size: 12px; color: var(--muted); border: 1px solid var(--line);
+    padding: 4px 10px; border-radius: 999px;
+  }
+  button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    padding: 7px 13px; border-radius: 8px; font-size: 13px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent-dim); }
+  button.primary { background: var(--accent); color: #06281a; border-color: var(--accent); font-weight: 600; }
+  main { display: grid; grid-template-columns: 480px 1fr; gap: 18px; padding: 18px; align-items: start; }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+  #board svg { width: 100%; height: auto; border-radius: 8px; display: block; }
+  .meta { margin-top: 12px; font-size: 13px; color: var(--muted); line-height: 1.6; word-break: break-word; }
+  .meta b { color: var(--text); }
+  .chat { display: flex; flex-direction: column; height: calc(100vh - 130px); min-height: 460px; }
+  .messages { flex: 1; overflow-y: auto; padding-right: 6px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 82%; padding: 11px 14px; border-radius: 12px; font-size: 14px; line-height: 1.6; white-space: pre-wrap; }
+  .msg.user { align-self: flex-end; background: var(--accent-dim); color: #eafff4; border-bottom-right-radius: 3px; }
+  .msg.bot { align-self: flex-start; background: var(--panel-2); border: 1px solid var(--line); border-bottom-left-radius: 3px; }
+  .msg.err { border-color: var(--danger); }
+  .msg strong { color: var(--accent); }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 10px; }
+  .chips button { font-size: 12px; padding: 5px 10px; border-radius: 999px; }
+  .composer { display: flex; gap: 8px; }
+  .composer input {
+    flex: 1; background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 10px; padding: 11px 13px; font-size: 14px; outline: none;
+  }
+  .composer input:focus { border-color: var(--accent-dim); }
+  .overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none;
+    align-items: center; justify-content: center; padding: 20px; z-index: 50;
+  }
+  .overlay.open { display: flex; }
+  .modal { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px; width: 460px; max-width: 100%; }
+  .modal h2 { margin: 0 0 4px; font-size: 16px; }
+  .modal p { color: var(--muted); font-size: 12.5px; line-height: 1.6; margin: 6px 0 14px; }
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .field input, .field select {
+    width: 100%; background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 9px; padding: 10px 12px; font-size: 13px; outline: none;
+  }
+  .row { display: flex; gap: 8px; }
+  .status { font-size: 12px; color: var(--muted); min-height: 16px; margin-bottom: 10px; }
+  .status.bad { color: var(--danger); }
+  .typing { color: var(--muted); font-size: 13px; font-style: italic; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>♞ Chess Coach</h1>
+  <span class="pill" id="turnPill">White to move</span>
+  <span class="pill" id="keyPill">No API key</span>
+  <div class="spacer"></div>
+  <button onclick="doPost('/api/undo')">Undo</button>
+  <button onclick="doPost('/api/flip')">Flip</button>
+  <button onclick="doPost('/api/reset')">New game</button>
+  <button class="primary" onclick="openSettings()">Settings</button>
+</header>
+
+<main>
+  <section class="card">
+    <div id="board"></div>
+    <div class="meta">
+      <div><b>Moves:</b> <span id="pgn">(none)</span></div>
+      <div><b>FEN:</b> <span id="fen"></span></div>
+    </div>
+  </section>
+
+  <section class="card chat">
+    <div class="messages" id="messages"></div>
+    <div class="chips">
+      <button onclick="send('hint')">Suggest a move</button>
+      <button onclick="send('What is the plan in this position?')">Explain the position</button>
+      <button onclick="send('What are my opponent threats right now?')">Opponent threats</button>
+      <button onclick="send('undo')">Take back</button>
+    </div>
+    <form class="composer" onsubmit="onSubmit(event)">
+      <input id="input" autocomplete="off" placeholder="e.g. I played e4, he replied e5" />
+      <button class="primary" type="submit">Send</button>
+    </form>
+  </section>
+</main>
+
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <h2>Groq API settings</h2>
+    <p>Get a free key at console.groq.com. It is held in this app's memory only, and is never written to disk. You can also put <code>GROQ_API_KEY</code> in a .env file instead.</p>
+    <div class="status" id="settingsStatus"></div>
+    <div class="field">
+      <label>Groq API key</label>
+      <input id="apiKey" type="password" placeholder="gsk_..." />
+    </div>
+    <div class="field">
+      <label>Model</label>
+      <div class="row">
+        <select id="modelSelect"></select>
+        <button onclick="loadModels()">Load</button>
+      </div>
+    </div>
+    <div class="row" style="justify-content:flex-end">
+      <button onclick="closeSettings()">Cancel</button>
+      <button class="primary" onclick="saveSettings()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const messagesEl = document.getElementById('messages');
+const inputEl = document.getElementById('input');
+
+function renderMarkdownish(text) {
+  const escaped = text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return escaped
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>');
+}
+
+function addMessage(text, role, isError) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + (role === 'user' ? 'user' : 'bot') + (isError ? ' err' : '');
+  div.innerHTML = renderMarkdownish(text);
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return div;
+}
+
+function showTyping() {
+  const div = document.createElement('div');
+  div.className = 'msg bot typing';
+  div.id = 'typing';
+  div.textContent = 'Thinking through the position...';
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function hideTyping() {
+  const el = document.getElementById('typing');
+  if (el) el.remove();
+}
+
+function applyState(state) {
+  document.getElementById('board').innerHTML = state.svg;
+  document.getElementById('fen').textContent = state.fen;
+  document.getElementById('pgn').textContent = state.pgn;
+  const turnPill = document.getElementById('turnPill');
+  turnPill.textContent = state.game_over
+    ? 'Game over'
+    : state.turn + ' to move' + (state.in_check ? ' (check)' : '');
+  const keyPill = document.getElementById('keyPill');
+  keyPill.textContent = state.has_key ? ('AI: ' + state.model) : 'No API key';
+  if (state.model) document.getElementById('modelSelect').dataset.current = state.model;
+  if (state.message) addMessage(state.message, 'bot', Boolean(state.error));
+}
+
+async function send(text) {
+  if (!text) return;
+  addMessage(text, 'user', false);
+  showTyping();
+  try {
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text })
+    });
+    const state = await response.json();
+    hideTyping();
+    applyState(state);
+  } catch (err) {
+    hideTyping();
+    addMessage('Could not reach the local server: ' + err, 'bot', true);
+  }
+}
+
+function onSubmit(event) {
+  event.preventDefault();
+  const text = inputEl.value.trim();
+  inputEl.value = '';
+  send(text);
+}
+
+async function doPost(url) {
+  const response = await fetch(url, { method: 'POST' });
+  applyState(await response.json());
+}
+
+function openSettings() { document.getElementById('overlay').classList.add('open'); }
+function closeSettings() { document.getElementById('overlay').classList.remove('open'); }
+
+function setStatus(text, bad) {
+  const el = document.getElementById('settingsStatus');
+  el.textContent = text;
+  el.className = 'status' + (bad ? ' bad' : '');
+}
+
+async function loadModels() {
+  setStatus('Fetching your available models...', false);
+  const key = document.getElementById('apiKey').value.trim();
+  const response = await fetch('/api/models', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_key: key })
+  });
+  const data = await response.json();
+  const select = document.getElementById('modelSelect');
+  select.innerHTML = '';
+  (data.models || []).forEach(function (id) {
+    const option = document.createElement('option');
+    option.value = id;
+    option.textContent = id;
+    select.appendChild(option);
+  });
+  if (select.dataset.current) select.value = select.dataset.current;
+  if (data.error) setStatus(data.error, true);
+  else setStatus('Loaded ' + (data.models || []).length + ' models.', false);
+}
+
+async function saveSettings() {
+  const key = document.getElementById('apiKey').value.trim();
+  const model = document.getElementById('modelSelect').value;
+  const response = await fetch('/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_key: key, model: model })
+  });
+  applyState(await response.json());
+  closeSettings();
+}
+
+(async function init() {
+  const response = await fetch('/api/state');
+  const state = await response.json();
+  applyState(state);
+  addMessage(
+    "Tell me the moves as they're played and I'll suggest your next one.\n\n" +
+    "Examples:\n• e4\n• I played d4, she answered Nf6\n• 1.e4 e5 2.Nf3 Nc6\n• e2e4 (long notation works too)\n\n" +
+    "Say 'hint' any time, or ask me a question about the position.",
+    'bot', false
+  );
+  if (!state.has_key) {
+    addMessage("No Groq API key yet — I'll still give engine-checked moves, but open Settings and add a key for full explanations.", 'bot', false);
+  }
+})();
+</script>
+</body>
+</html>
